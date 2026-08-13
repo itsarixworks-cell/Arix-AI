@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/AudioOrb.tsx","./src/components/NavigationRail.tsx","./src/components/SettingsModal.tsx","./src/components/TitleBar.tsx","./src/components/TranscriptPanel.tsx","./src/hooks/useArixSession.ts","./src/hooks/useAudioEngine.ts","./src/lib/audio.ts","./src/types/arix.ts"],"version":"5.6.3"}

@@ -30,3 +30,7 @@ desktop.ini
 coverage/
 .cache/
 *.spec
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+frontend/electron/*.d.cts
