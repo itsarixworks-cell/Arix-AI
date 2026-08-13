@@ -1,0 +1,11 @@
+# Validated for Python 3.11
+fastapi==0.141.1
+uvicorn[standard]==0.52.2
+google-genai==1.75.0
+pydantic==2.13.4
+python-dotenv==1.2.2
+
+# Development / tests
+httpx==0.28.1
+pytest==8.4.2
+pytest-asyncio==0.26.0

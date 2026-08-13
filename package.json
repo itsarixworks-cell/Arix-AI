@@ -1,0 +1,22 @@
+{
+  "name": "arix-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Voice-first Windows desktop AI agent",
+  "scripts": {
+    "install:all": "npm --prefix frontend install && python -m pip install -r backend/requirements.txt",
+    "dev": "concurrently -k -n API,UI,ELECTRON -c cyan,magenta,blue \"npm run backend:dev\" \"npm --prefix frontend run dev\" \"wait-on tcp:127.0.0.1:5173 tcp:127.0.0.1:8765 && npm --prefix frontend run electron:dev\"",
+    "backend:dev": "python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8765 --reload",
+    "build": "npm --prefix frontend run build",
+    "test": "python -m pytest backend/tests -q && npm --prefix frontend run lint",
+    "typecheck": "npm --prefix frontend run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "wait-on": "^8.0.3"
+  },
+  "engines": {
+    "node": ">=20",
+    "python": ">=3.11 <3.12"
+  }
+}
