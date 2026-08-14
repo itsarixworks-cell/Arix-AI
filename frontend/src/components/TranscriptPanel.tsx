@@ -13,7 +13,9 @@ export function TranscriptPanel({ status, transcripts, onSend, onClear }: Props)
   const [draft, setDraft] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
   const connected = !['offline', 'connecting', 'error'].includes(status)
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), [transcripts])
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [transcripts])
 
   const submit = () => {
     if (onSend(draft)) setDraft('')

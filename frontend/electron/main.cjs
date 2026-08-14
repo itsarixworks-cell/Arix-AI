@@ -3,6 +3,10 @@ const path = require('path')
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL)
 
+if (isDev) {
+  process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1480,
