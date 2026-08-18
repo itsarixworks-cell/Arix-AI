@@ -11,6 +11,7 @@ from backend.app.memory.scratchpad import TierOneScratchpad
 from backend.app.memory.service import MemoryService
 from backend.app.tools.memory_tools import register_memory_tools
 from backend.app.tools.registry import ToolRegistry
+from backend.app.tools.system_tools import register_system_tools
 
 
 @dataclass(slots=True)
@@ -56,4 +57,5 @@ async def create_memory_runtime(
     service = MemoryService(repository, TierOneScratchpad(data_directory / "tier1_memory.txt"))
     tools = ToolRegistry()
     register_memory_tools(tools, service)
+    register_system_tools(tools)
     return MemoryRuntime(repository=repository, service=service, tools=tools)

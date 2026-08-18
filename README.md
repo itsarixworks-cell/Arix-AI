@@ -14,6 +14,9 @@ Arix AI is a local, voice-first Windows desktop assistant. The current Phase 2 f
 - In-app Gemini API key, model, voice, and system-instruction fields
 - Typed Gemini function registry with normalized success and error results
 - `save_memory` and `request_memory` live-session tools
+- Original, typed `open_app`, `web_search`, and `weather_report` executable tools
+- Allowlisted, shell-free application launching and HTTP(S)-only website opening
+- Bounded DuckDuckGo result retrieval and structured current weather from wttr.in
 - Tier-1 private text scratchpad injected into each session
 - Durable graph memory with atomic local JSON storage or optional Firebase RTDB
 - Gemini 2.5 Flash memory extraction, fuzzy retrieval, and conservative maintenance
@@ -82,7 +85,7 @@ Arix-AI/
 │   │   ├── api/                   # Live and memory REST/WebSocket endpoints
 │   │   ├── core/                  # Settings and protocol validation
 │   │   ├── memory/                # Models, repositories, manager, migration
-│   │   ├── tools/                 # Typed tool registry and memory tools
+│   │   ├── tools/                 # Typed registry, memory, and safe system tools
 │   │   ├── services/gemini_live.py
 │   │   └── main.py
 │   ├── tests/
@@ -197,21 +200,23 @@ All local writes use a temporary file followed by an atomic replace. Graph nodes
 - Firebase credentials remain backend-only.
 - Electron uses context isolation, sandboxing, and no Node.js integration in the renderer.
 - `.env` files, generated builds, Python caches, and local secrets are ignored by Git.
-- Side-effecting executable tools are not enabled until a confirmation and permission policy is implemented.
+- Application launching is restricted to an explicit allowlist and never invokes a command shell.
+- Website opening accepts only HTTP(S) URLs; search and weather calls use bounded HTTPS requests.
+- Higher-risk side-effecting tools remain disabled until a confirmation and permission policy is implemented.
 
 ## Testing status
 
 - Frontend production build: passing
 - TypeScript type-check: passing
 - ESLint: passing
-- Python unit/API tests: passing (12 tests)
+- Python unit/API tests: passing (16 tests)
 - Backend Python compile check: passing
 - Memory service, migration, manager, Firebase schema, registry, and snapshot API tests: passing
 - Live Gemini and Firebase credentials require manual verification on Windows with valid account access, network access, and microphone permission
 
 ## Not implemented yet
 
-- Executable Windows application, browser, file, messaging, settings, and desktop controls
+- Advanced browser automation, file, messaging, settings, and desktop controls
 - Screen capture and visual processing
 - Website and Office/PDF document generation
 - Smart-home integrations, autonomous agent tasks, and game updating
@@ -234,4 +239,4 @@ All local writes use a temporary file followed by an atomic replace. Graph nodes
 - Platform: Local Windows desktop
 - Hosted deployment: Not applicable
 - Repository: `https://github.com/itsarixworks-cell/Arix-AI`
-- Phase: 2 foundation — voice UI, Gemini tool calling, and graph memory
+- Phase: 2 — voice UI, graph memory, and the first safe executable tool group
