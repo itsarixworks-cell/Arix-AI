@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -10,20 +11,36 @@ from google import genai
 from google.genai import types
 
 from backend.app.core.protocol import SessionStart
+from backend.app.tools.registry import ToolRegistry
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
+TurnIngestor = Callable[[str, str], Awaitable[None]]
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiLiveBridge:
     """Owns one Gemini Live session and translates it to Arix protocol events."""
 
-    def __init__(self, config: SessionStart, api_key: str, emit: EventSink) -> None:
+    def __init__(
+        self,
+        config: SessionStart,
+        api_key: str,
+        emit: EventSink,
+        tools: ToolRegistry,
+        ingest_turn: TurnIngestor | None = None,
+    ) -> None:
         self.config = config
         self.api_key = api_key
         self.emit = emit
+        self.tools = tools
+        self.ingest_turn = ingest_turn
+        self._user_transcript: list[str] = []
+        self._assistant_transcript: list[str] = []
         self._client = genai.Client(api_key=api_key)
         self._session: Any | None = None
         self._send_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=128)
+        self._memory_tasks: set[asyncio.Task[None]] = set()
         self._stopping = asyncio.Event()
 
     def _live_config(self) -> types.LiveConnectConfig:
@@ -37,6 +54,7 @@ class GeminiLiveBridge:
                 )
             ),
             system_instruction=self.config.system_instruction,
+            tools=self.tools.declarations(),
         )
 
     async def run(self) -> None:
@@ -78,13 +96,37 @@ class GeminiLiveBridge:
             async for response in self._session.receive():
                 await self._handle_response(response)
 
+    async def _ingest_completed_turn(self, material: str) -> None:
+        if not self.ingest_turn:
+            return
+        try:
+            await self.ingest_turn(material, "manager")
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # Memory extraction is best-effort and must never interrupt a live conversation.
+            logger.warning("Memory turn ingestion failed (%s)", type(error).__name__)
+
     async def _handle_response(self, response: Any) -> None:
+        tool_call = getattr(response, "tool_call", None)
+        if tool_call and self._session is not None:
+            function_responses: list[types.FunctionResponse] = []
+            for call in getattr(tool_call, "function_calls", None) or []:
+                result = await self.tools.execute(call.name, dict(call.args or {}))
+                function_responses.append(types.FunctionResponse(
+                    name=call.name, id=call.id, response=result
+                ))
+                await self.emit({"type": "tool.result", "name": call.name, "result": result})
+            if function_responses:
+                await self._session.send_tool_response(function_responses=function_responses)
+
         content = getattr(response, "server_content", None)
         if content is None:
             return
 
         input_transcription = getattr(content, "input_transcription", None)
         if input_transcription and getattr(input_transcription, "text", None):
+            self._user_transcript.append(input_transcription.text)
             await self.emit({
                 "type": "transcript",
                 "role": "user",
@@ -94,6 +136,7 @@ class GeminiLiveBridge:
 
         output_transcription = getattr(content, "output_transcription", None)
         if output_transcription and getattr(output_transcription, "text", None):
+            self._assistant_transcript.append(output_transcription.text)
             await self.emit({
                 "type": "transcript",
                 "role": "assistant",
@@ -119,6 +162,16 @@ class GeminiLiveBridge:
         if getattr(content, "interrupted", False):
             await self.emit({"type": "interrupted"})
         if getattr(content, "turn_complete", False):
+            if self.ingest_turn and (self._user_transcript or self._assistant_transcript):
+                material = (
+                    f"User: {''.join(self._user_transcript).strip()}\n"
+                    f"Arix: {''.join(self._assistant_transcript).strip()}"
+                )
+                task = asyncio.create_task(self._ingest_completed_turn(material))
+                self._memory_tasks.add(task)
+                task.add_done_callback(self._memory_tasks.discard)
+            self._user_transcript.clear()
+            self._assistant_transcript.clear()
             await self.emit({"type": "turn.complete"})
 
     async def send_audio(self, data: bytes) -> None:
@@ -137,4 +190,9 @@ class GeminiLiveBridge:
 
     async def stop(self) -> None:
         self._stopping.set()
+        for task in self._memory_tasks:
+            task.cancel()
+        if self._memory_tasks:
+            await asyncio.gather(*self._memory_tasks, return_exceptions=True)
+        self._memory_tasks.clear()
 

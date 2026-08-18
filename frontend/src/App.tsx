@@ -1,23 +1,30 @@
-import { useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import { Mic, Power, Settings2, Sparkles } from 'lucide-react'
 import { AudioOrb } from './components/AudioOrb'
-import { NavigationRail } from './components/NavigationRail'
+import { NavigationRail, type WorkspaceView } from './components/NavigationRail'
 import { SettingsModal } from './components/SettingsModal'
 import { TitleBar } from './components/TitleBar'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { useArixSession } from './hooks/useArixSession'
 import type { SessionConfig } from './types/arix'
 
+const MemoryGraphWorkspace = lazy(() =>
+  import('./components/memory/MemoryGraphWorkspace').then((module) => ({
+    default: module.MemoryGraphWorkspace,
+  })),
+)
+
 const defaultConfig: SessionConfig = {
   apiKey: '',
   model: 'gemini-3.1-flash-live-preview',
   voice: 'Kore',
-  systemInstruction: 'You are Arix, a concise, capable voice-first desktop assistant. Speak naturally, be helpful, and clearly acknowledge requests. You do not have desktop tools yet, so never claim an action was completed.',
+  systemInstruction: 'You are Arix, a concise, capable voice-first desktop assistant. Speak naturally and use only the tools supplied to this session. Never claim an action succeeded unless its tool result confirms success.',
 }
 
 export default function App() {
   const session = useArixSession()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [activeView, setActiveView] = useState<WorkspaceView>('voice')
   const [config, setConfig] = useState(defaultConfig)
   const connected = !['offline', 'error'].includes(session.status)
   const latest = useMemo(() => session.transcripts.at(-1), [session.transcripts])
@@ -29,9 +36,10 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell antialiased">
+    <div className={`app-shell antialiased ${activeView === 'memory' ? 'memory-mode' : ''}`}>
       <TitleBar />
-      <NavigationRail onSettings={() => setSettingsOpen(true)} />
+      <NavigationRail activeView={activeView} onNavigate={setActiveView} onSettings={() => setSettingsOpen(true)} />
+      {activeView === 'voice' ? <>
       <main className="command-center" id="command-center">
         <header className="workspace-header">
           <div><span className="eyebrow"><Sparkles size={12} /> GEMINI LIVE</span><h1>Voice link</h1></div>
@@ -53,6 +61,11 @@ export default function App() {
         </section>
       </main>
       <TranscriptPanel status={session.status} transcripts={session.transcripts} onSend={session.sendText} onClear={session.clearTranscripts} />
+      </> : (
+        <Suspense fallback={<main className="memory-workspace memory-loading">Loading memory graph…</main>}>
+          <MemoryGraphWorkspace />
+        </Suspense>
+      )}
       <SettingsModal open={settingsOpen} value={config} onChange={setConfig} onClose={() => setSettingsOpen(false)} />
     </div>
   )

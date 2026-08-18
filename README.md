@@ -1,23 +1,26 @@
 # Arix AI
 
-Arix AI is a local, voice-first Windows desktop assistant. Phase 1 provides a premium Electron interface and a Python 3.11 bridge to the Google Gemini Live API for low-latency microphone conversation, native audio responses, live transcription, and text messages.
+Arix AI is a local, voice-first Windows desktop assistant. The current Phase 2 foundation combines a premium Electron interface and Python 3.11 Gemini Live bridge with typed function calling, two-tier long-term memory, and an interactive 3D memory graph.
 
-> Arix is intentionally a desktop application, not a hosted web application. The backend binds to `127.0.0.1` and the Gemini API key stays on the user's machine.
+> Arix is intentionally a desktop application, not a hosted web application. The backend binds to `127.0.0.1`, and the Gemini API key stays on the user's machine.
 
-## Phase 1 features
+## Completed features
 
 - Electron desktop shell with a custom Windows title bar
 - Responsive command-center interface built with React, TypeScript, Vite, and Tailwind CSS
-- Animated audio orb, rings, waveform, and state colors
-- Pipeline states: offline, connecting, listening, processing, speaking, and error
-- Real-time 16 kHz PCM microphone capture
-- Native Gemini PCM audio playback at the response sample rate
-- Input and output live transcription
-- Transient captions plus persistent conversation feed
-- Secondary text input during an active live session
+- Animated audio orb, waveform, state colors, and live captions
+- Real-time 16 kHz PCM microphone capture and native Gemini audio playback
+- Input/output live transcription and secondary text input
 - In-app Gemini API key, model, voice, and system-instruction fields
-- API key is held only in renderer memory and forwarded to the local backend for the current session; it is not persisted
-- Modular local WebSocket protocol ready for future tools and automation
+- Typed Gemini function registry with normalized success and error results
+- `save_memory` and `request_memory` live-session tools
+- Tier-1 private text scratchpad injected into each session
+- Durable graph memory with atomic local JSON storage or optional Firebase RTDB
+- Gemini 2.5 Flash memory extraction, fuzzy retrieval, and conservative maintenance
+- Best-effort background ingestion of completed turns without blocking conversation
+- Interactive, searchable 3D memory constellation with category and importance filters
+- Live memory updates over a local WebSocket and a REST snapshot endpoint
+- Legacy memory migration and Firebase upload utilities
 
 ## Technology
 
@@ -26,11 +29,13 @@ Arix AI is a local, voice-first Windows desktop assistant. Phase 1 provides a pr
 | Desktop | Electron 43 |
 | Interface | React 18, TypeScript, Vite 6, Tailwind CSS 3 |
 | Backend | Python 3.11, FastAPI, Uvicorn |
-| AI | `google-genai` 1.75, Gemini Live API |
-| Transport | Local WebSocket at `ws://127.0.0.1:8765/ws/live` |
+| AI | `google-genai` 1.75, Gemini Live API, Gemini 2.5 Flash memory manager |
+| Memory | Atomic local JSON/text fallback or Firebase Realtime Database |
+| Visualization | Three.js and `3d-force-graph` (lazy-loaded) |
+| Transport | Local WebSockets at `/ws/live` and `/ws/memory` |
 | Audio input | Mono PCM16, 16 kHz, little-endian |
 
-Python **3.11** is the supported runtime. Dependency versions are pinned in `backend/requirements.txt` for repeatable Windows installation. Python 3.14 is not used because its ecosystem compatibility is still narrower for the future Windows automation and audio stack.
+Python **3.11** is the supported runtime. Dependency versions are pinned in `backend/requirements.txt` for repeatable Windows installation. Newer Python runtimes are not used because ecosystem compatibility is narrower for the planned Windows automation and audio stack.
 
 ## Architecture
 
@@ -39,42 +44,45 @@ Microphone / text
        │
        ▼
 Electron renderer (React)
-  ├─ audio resampling + level meter
-  ├─ session UI and transcript state
-  └─ PCM playback scheduler
-       │ local WebSocket
+  ├─ audio resampling + playback
+  ├─ live transcript and session state
+  └─ lazy-loaded 3D memory workspace
+       │ local REST + WebSockets
        ▼
 Python FastAPI bridge
-  ├─ session validation
-  ├─ Gemini Live lifecycle
+  ├─ Gemini Live lifecycle and event translation
   ├─ bounded real-time audio queue
-  └─ event translation
-       │ secure Gemini WebSocket
+  ├─ typed tool registry (save_memory, request_memory)
+  └─ two-tier memory runtime
+       ├─ private text scratchpad
+       ├─ local graph JSON or Firebase RTDB
+       └─ Gemini 2.5 Flash memory manager
+       │ secure Gemini connections
        ▼
-Gemini 3.1 Flash Live Preview
+Gemini 3.1 Flash Live Preview + Gemini 2.5 Flash
 ```
 
-The renderer never contacts Gemini directly. This isolates credentials and creates a clean boundary where tool execution, authorization, persistence, and Windows automation can be added later.
+The renderer never contacts Gemini or Firebase directly. This isolates credentials and establishes a boundary for tool execution, authorization, persistence, and future Windows automation.
 
 ## Project structure
 
 ```text
 Arix-AI/
 ├── frontend/
-│   ├── electron/
-│   │   ├── main.cjs              # Secure Electron main process
-│   │   └── preload.cjs           # Minimal context bridge
+│   ├── electron/                  # Secure Electron main process and preload
 │   └── src/
-│       ├── components/            # Orb, navigation, transcript, settings
-│       ├── hooks/                 # Live session and audio engines
+│       ├── components/            # Voice UI, navigation, settings, memory graph
+│       ├── hooks/                 # Live session, audio, and memory graph streams
 │       ├── lib/audio.ts           # PCM conversion and decoding
-│       ├── types/arix.ts          # Shared UI protocol types
+│       ├── types/                 # UI protocol and memory types
 │       ├── App.tsx
 │       └── styles.css
 ├── backend/
 │   ├── app/
-│   │   ├── api/live.py            # Local WebSocket endpoint
-│   │   ├── core/                  # Settings and message validation
+│   │   ├── api/                   # Live and memory REST/WebSocket endpoints
+│   │   ├── core/                  # Settings and protocol validation
+│   │   ├── memory/                # Models, repositories, manager, migration
+│   │   ├── tools/                 # Typed tool registry and memory tools
 │   │   ├── services/gemini_live.py
 │   │   └── main.py
 │   ├── tests/
@@ -120,21 +128,24 @@ The command starts the local Python bridge, Vite, and Electron together. Keep th
 1. Launch Arix.
 2. Select **Configure** or the Settings icon.
 3. Paste your Gemini API key into the in-app field.
-4. Keep the default `gemini-3.1-flash-live-preview` model unless Google changes the preview model available to your account.
+4. Keep the default live model unless Google changes the preview model available to your account.
 5. Choose a voice and optionally edit the system instruction.
 6. Select **Start live session** and allow microphone access.
-7. Speak naturally. The orb and waveform respond to microphone activity, and Arix's audio is played as it arrives.
-8. Use the right-side composer to send text within the same live session.
-9. Select **End live session** when finished.
+7. Speak naturally. The orb and waveform respond to microphone activity, and Arix plays audio as it arrives.
+8. Use the right-side composer to send text in the same session.
+9. Open **Memory** from the navigation rail to inspect the constellation. Search titles, filter categories, adjust minimum importance, inspect nodes, or fit the graph to the viewport.
+10. Select **End live session** when finished.
 
-The key is deliberately not stored. Enter it again after restarting the application. A future release can use Windows Credential Manager for opt-in encrypted persistence.
+The API key is deliberately not stored. Enter it again after restarting the application. When Firebase is not configured, memory remains local under `backend/data/` (or `ARIX_DATA_DIR`).
 
 ## Local endpoints and protocol
 
 - `GET http://127.0.0.1:8765/health` — backend health information
+- `GET http://127.0.0.1:8765/api/memory/snapshot` — active graph snapshot
 - `WS ws://127.0.0.1:8765/ws/live` — live bidirectional session
+- `WS ws://127.0.0.1:8765/ws/memory` — changed graph snapshots
 
-First WebSocket message:
+First live WebSocket message:
 
 ```json
 {
@@ -146,7 +157,11 @@ First WebSocket message:
 }
 ```
 
-Subsequent binary frames are raw PCM16 microphone chunks. Text frames use `{ "type": "text", "text": "..." }`. Server events include `session.ready`, `status`, `transcript`, `audio`, `turn.complete`, `interrupted`, and `error`.
+Subsequent binary frames are raw PCM16 microphone chunks. Text frames use `{ "type": "text", "text": "..." }`. Server events include `session.ready`, `status`, `transcript`, `audio`, `tool.result`, `turn.complete`, `interrupted`, and `error`.
+
+### Optional Firebase memory
+
+Leave Firebase variables unset to use local memory. To use Firebase RTDB, copy `backend/.env.example` to `backend/.env`, set `ARIX_FIREBASE_DATABASE_URL`, and provide either `ARIX_FIREBASE_SERVICE_ACCOUNT` (a path outside the repository) or `ARIX_FIREBASE_SERVICE_ACCOUNT_JSON`. Never commit credentials.
 
 ## Development commands
 
@@ -163,48 +178,60 @@ Backend only:
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
+## Data architecture
+
+- `tier1_memory.txt`: bounded private scratchpad for explicit durable facts
+- `memory_graph.json`: local adjacency-list graph fallback
+- Firebase `/memory/nodes`: full memory nodes
+- Firebase `/memory/edges`: bidirectional adjacency data
+- Firebase `/memory/title_index`: compact retrieval index
+- Firebase `/memory/anchors`: permanent Arix and user root markers
+
+All local writes use a temporary file followed by an atomic replace. Graph nodes support categories, importance, access metadata, source attribution, archiving, and weighted relationships.
+
 ## Security notes
 
 - The backend listens only on the loopback interface by default.
 - WebSocket browser origins are restricted to local development origins and Electron's local file origin.
 - The API key is excluded from logs and is never written by the app.
+- Firebase credentials remain backend-only.
 - Electron uses context isolation, sandboxing, and no Node.js integration in the renderer.
-- No API key should be committed to Git. `.env` files are ignored.
+- `.env` files, generated builds, Python caches, and local secrets are ignored by Git.
+- Side-effecting executable tools are not enabled until a confirmation and permission policy is implemented.
 
 ## Testing status
 
 - Frontend production build: passing
 - TypeScript type-check: passing
 - ESLint: passing
-- Python unit/API tests: passing
-- Gemini config construction against `google-genai`: passing
-- Live Gemini conversation requires a valid user key and model access and should be verified on Windows with microphone permission
+- Python unit/API tests: passing (12 tests)
+- Backend Python compile check: passing
+- Memory service, migration, manager, Firebase schema, registry, and snapshot API tests: passing
+- Live Gemini and Firebase credentials require manual verification on Windows with valid account access, network access, and microphone permission
 
 ## Not implemented yet
 
-The following are deliberately outside Phase 1:
-
-- Screen sharing or vision frames
-- Tool/function calling
-- File and directory management
-- Website or document generation
-- Microsoft UI Automation and desktop control
-- Conversation persistence and long-term memory
+- Executable Windows application, browser, file, messaging, settings, and desktop controls
+- Screen capture and visual processing
+- Website and Office/PDF document generation
+- Smart-home integrations, autonomous agent tasks, and game updating
+- Full conversation history and session resumption (durable fact memory is implemented)
 - Production installer containing an embedded Python runtime
-- Secure persisted key storage
+- Secure persisted API-key storage
 
 ## Recommended next steps
 
 1. Add Windows Credential Manager integration for optional key persistence.
 2. Bundle a managed Python 3.11 runtime and backend process into the Electron installer.
-3. Add a typed tool registry and confirmation policy before implementing UI Automation.
-4. Add SQLite conversation history and session resumption.
-5. Add screen capture only after explicit per-session consent controls.
-6. Create a signed Windows installer through a Windows GitHub Actions runner.
+3. Add a permission and confirmation policy before enabling side-effecting Windows tools.
+4. Implement executable tools in small, tested groups with strict schemas, allowlists, timeouts, and audit results.
+5. Add SQLite conversation history and session resumption.
+6. Add screen capture only after explicit per-session consent controls.
+7. Create a signed Windows installer through a Windows GitHub Actions runner.
 
 ## Deployment status
 
 - Platform: Local Windows desktop
 - Hosted deployment: Not applicable
 - Repository: `https://github.com/itsarixworks-cell/Arix-AI`
-- Phase: 1 — voice UI and Gemini Live bridge
+- Phase: 2 foundation — voice UI, Gemini tool calling, and graph memory

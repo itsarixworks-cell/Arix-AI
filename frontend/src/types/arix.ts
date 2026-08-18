@@ -25,6 +25,7 @@ export type ServerEvent =
   | { type: 'interrupted' }
   | { type: 'error'; code?: string; message: string }
   | { type: 'session.ready'; model: string }
+  | { type: 'tool.result'; name: string; result: unknown }
 
 declare global {
   interface Window {

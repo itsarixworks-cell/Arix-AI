@@ -54,7 +54,12 @@ async def live_socket(websocket: WebSocket) -> None:
             await emit({"type": "error", "code": "missing_api_key", "message": "A Gemini API key is required"})
             return
 
-        bridge = GeminiLiveBridge(start, api_key, emit)
+        memory_runtime = websocket.app.state.memory_runtime
+        manager = await memory_runtime.configure_manager(api_key)
+        start.system_instruction += await memory_runtime.service.session_context()
+        bridge = GeminiLiveBridge(
+            start, api_key, emit, memory_runtime.tools, ingest_turn=manager.ingest
+        )
         bridge_task = asyncio.create_task(bridge.run())
 
         while True:
