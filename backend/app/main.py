@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Arix Local Bridge",
-    version="0.2.0",
+    version="0.3.0",
     description="Local-only bridge between the Arix Electron client and Gemini Live.",
     lifespan=lifespan,
 )

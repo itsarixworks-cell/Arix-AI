@@ -14,6 +14,7 @@ if not exist .venv py -3.11 -m venv .venv
 call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 python -m pip install -r backend\requirements.txt
+python -m playwright install chromium
 
 echo [Arix] Installing desktop dependencies...
 call npm install

@@ -9,9 +9,14 @@ from backend.app.memory.manager import GeminiMemoryManager
 from backend.app.memory.repository import GraphRepository, LocalGraphRepository
 from backend.app.memory.scratchpad import TierOneScratchpad
 from backend.app.memory.service import MemoryService
+from backend.app.tools.computer_tools import register_computer_tools
+from backend.app.tools.document_tools import register_document_tools
+from backend.app.tools.integration_tools import register_integration_tools
 from backend.app.tools.memory_tools import register_memory_tools
+from backend.app.tools.processor_tools import register_processor_tools
 from backend.app.tools.registry import ToolRegistry
 from backend.app.tools.system_tools import register_system_tools
+from backend.app.tools.workspace_tools import close_browser_runtime, register_workspace_tools
 
 
 @dataclass(slots=True)
@@ -37,6 +42,7 @@ class MemoryRuntime:
         await self.service.scratchpad.flush()
         if self.manager:
             await self.manager.close()
+        await close_browser_runtime()
 
 
 async def create_memory_runtime(
@@ -58,4 +64,9 @@ async def create_memory_runtime(
     tools = ToolRegistry()
     register_memory_tools(tools, service)
     register_system_tools(tools)
+    register_computer_tools(tools)
+    register_workspace_tools(tools)
+    register_integration_tools(tools)
+    register_processor_tools(tools)
+    register_document_tools(tools)
     return MemoryRuntime(repository=repository, service=service, tools=tools)

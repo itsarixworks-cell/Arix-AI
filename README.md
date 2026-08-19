@@ -1,6 +1,6 @@
 # Arix AI
 
-Arix AI is a local, voice-first Windows desktop assistant. The current Phase 2 foundation combines a premium Electron interface and Python 3.11 Gemini Live bridge with typed function calling, two-tier long-term memory, and an interactive 3D memory graph.
+Arix AI is a local, voice-first Windows desktop assistant. The current Phase 3 foundation combines a premium Electron interface and Python 3.11 Gemini Live bridge with typed function calling, two-tier long-term memory, an interactive 3D memory graph, and a guarded executable-tool suite.
 
 > Arix is intentionally a desktop application, not a hosted web application. The backend binds to `127.0.0.1`, and the Gemini API key stays on the user's machine.
 
@@ -14,9 +14,15 @@ Arix AI is a local, voice-first Windows desktop assistant. The current Phase 2 f
 - In-app Gemini API key, model, voice, and system-instruction fields
 - Typed Gemini function registry with normalized success and error results
 - `save_memory` and `request_memory` live-session tools
-- Original, typed `open_app`, `web_search`, and `weather_report` executable tools
+- 24 typed Gemini tools with normalized structured results
+- Memory: `save_memory` and `request_memory`
+- Discovery: `open_app`, `web_search`, `weather_report`, `youtube_video`, and `flight_finder`
+- Windows automation: `reminder`, `computer_settings`, `computer_control`, and `shutdown_arix`
+- Workspace automation: `browser_control`, `file_controller`, `desktop_control`, `screen_process`, and `file_processor`
+- Integrations: reviewed message composers, private-LAN Kasa controls, and Steam update/install requests
+- Builders: PowerPoint, Excel, Word, and PDF generation plus structured local agent-task records
 - Allowlisted, shell-free application launching and HTTP(S)-only website opening
-- Bounded DuckDuckGo result retrieval and structured current weather from wttr.in
+- Bounded web/network operations, optional-dependency loading, and explicit confirmations for consequential actions
 - Tier-1 private text scratchpad injected into each session
 - Durable graph memory with atomic local JSON storage or optional Firebase RTDB
 - Gemini 2.5 Flash memory extraction, fuzzy retrieval, and conservative maintenance
@@ -55,7 +61,7 @@ Electron renderer (React)
 Python FastAPI bridge
   ├─ Gemini Live lifecycle and event translation
   ├─ bounded real-time audio queue
-  ├─ typed tool registry (save_memory, request_memory)
+  ├─ typed 24-tool registry with confirmation and path guards
   └─ two-tier memory runtime
        ├─ private text scratchpad
        ├─ local graph JSON or Firebase RTDB
@@ -85,7 +91,7 @@ Arix-AI/
 │   │   ├── api/                   # Live and memory REST/WebSocket endpoints
 │   │   ├── core/                  # Settings and protocol validation
 │   │   ├── memory/                # Models, repositories, manager, migration
-│   │   ├── tools/                 # Typed registry, memory, and safe system tools
+│   │   ├── tools/                 # Registry, safety policy, automation, processors, builders
 │   │   ├── services/gemini_live.py
 │   │   └── main.py
 │   ├── tests/
@@ -103,6 +109,7 @@ Arix-AI/
 2. [Python 3.11 (64-bit)](https://www.python.org/downloads/) with the Python launcher enabled
 3. [Node.js 20 LTS or newer](https://nodejs.org/)
 4. A Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
+5. Optional: the Tesseract desktop binary for OCR actions
 
 ### Install
 
@@ -124,7 +131,7 @@ scripts\setup-windows.bat
 .\scripts\start-windows.ps1
 ```
 
-The command starts the local Python bridge, Vite, and Electron together. Keep the terminal open while using this development build.
+The setup scripts also install Playwright's isolated Chromium browser. The start command launches the local Python bridge, Vite, and Electron together. Keep the terminal open while using this development build.
 
 ## User guide
 
@@ -201,37 +208,40 @@ All local writes use a temporary file followed by an atomic replace. Graph nodes
 - Electron uses context isolation, sandboxing, and no Node.js integration in the renderer.
 - `.env` files, generated builds, Python caches, and local secrets are ignored by Git.
 - Application launching is restricted to an explicit allowlist and never invokes a command shell.
-- Website opening accepts only HTTP(S) URLs; search and weather calls use bounded HTTPS requests.
-- Higher-risk side-effecting tools remain disabled until a confirmation and permission policy is implemented.
+- Website opening accepts only HTTP(S) URLs; search, weather, image, and metadata calls use bounded requests.
+- File operations resolve paths beneath the user profile, reject traversal/symlink escapes, bound reads and traversal, and use the Recycle Bin for deletion.
+- Shutdown, delete, overwrite, move, organization, message composition, browser submissions, smart-home state changes, and Steam installs/updates require explicit confirmation.
+- Browser automation uses one isolated Playwright context, blocks local/internal URL targets, applies timeouts, and does not log typed values.
+- Optional Windows and document dependencies are loaded only when their tool is called, with actionable install errors.
+- No executable tool evaluates generated code or accepts arbitrary shell commands.
 
 ## Testing status
 
 - Frontend production build: passing
 - TypeScript type-check: passing
 - ESLint: passing
-- Python unit/API tests: passing (16 tests)
+- Python unit/API tests: passing (46 tests)
 - Backend Python compile check: passing
-- Memory service, migration, manager, Firebase schema, registry, and snapshot API tests: passing
+- Memory, registry, safety, confirmation, file, browser, computer, integration, processor, document, and API tests: passing
 - Live Gemini and Firebase credentials require manual verification on Windows with valid account access, network access, and microphone permission
 
 ## Not implemented yet
 
-- Advanced browser automation, file, messaging, settings, and desktop controls
-- Screen capture and visual processing
-- Website and Office/PDF document generation
-- Smart-home integrations, autonomous agent tasks, and game updating
 - Full conversation history and session resumption (durable fact memory is implemented)
-- Production installer containing an embedded Python runtime
+- Production installer containing an embedded Python runtime and OCR binary
 - Secure persisted API-key storage
+- Per-tool permissions UI, audit-history UI, and session-scoped screen-capture consent
+- Direct provider APIs that can prove message delivery; current messaging opens a reviewed composer and correctly reports `sent: false`
+- Autonomous arbitrary-code execution; `agent_task` intentionally stores and tracks structured tasks only
 
 ## Recommended next steps
 
-1. Add Windows Credential Manager integration for optional key persistence.
-2. Bundle a managed Python 3.11 runtime and backend process into the Electron installer.
-3. Add a permission and confirmation policy before enabling side-effecting Windows tools.
-4. Implement executable tools in small, tested groups with strict schemas, allowlists, timeouts, and audit results.
-5. Add SQLite conversation history and session resumption.
-6. Add screen capture only after explicit per-session consent controls.
+1. Add a renderer permission/confirmation dialog and persistent local audit history for every consequential tool result.
+2. Add Windows Credential Manager integration for optional key persistence.
+3. Bundle a managed Python 3.11 runtime, Playwright Chromium, and optional OCR runtime into the Electron installer.
+4. Add SQLite conversation history and session resumption.
+5. Add explicit per-session consent controls for screen capture, OCR, keyboard, and mouse automation.
+6. Run Windows hardware integration tests for brightness, multi-monitor capture, Task Scheduler, Steam, and Kasa devices.
 7. Create a signed Windows installer through a Windows GitHub Actions runner.
 
 ## Deployment status
@@ -239,4 +249,4 @@ All local writes use a temporary file followed by an atomic replace. Graph nodes
 - Platform: Local Windows desktop
 - Hosted deployment: Not applicable
 - Repository: `https://github.com/itsarixworks-cell/Arix-AI`
-- Phase: 2 — voice UI, graph memory, and the first safe executable tool group
+- Phase: 3 — voice UI, graph memory, and guarded executable-tool suite

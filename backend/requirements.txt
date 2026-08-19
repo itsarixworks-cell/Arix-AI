@@ -6,6 +6,21 @@ pydantic==2.13.4
 python-dotenv==1.2.2
 firebase-admin==7.1.0
 
+# Executable tools (loaded lazily so unsupported features fail with an install hint)
+Pillow==11.3.0
+openpyxl==3.1.5
+playwright==1.55.0
+pypdf==6.1.1
+python-docx==1.2.0
+python-kasa==0.10.2
+python-pptx==1.0.2
+reportlab==4.4.4
+Send2Trash==1.8.3
+youtube-transcript-api==1.2.2
+pytesseract==0.3.13
+pyautogui==0.9.54; sys_platform == "win32"
+screen-brightness-control==0.24.2; sys_platform == "win32"
+
 # Development / tests
 httpx==0.28.1
 pytest==8.4.2
