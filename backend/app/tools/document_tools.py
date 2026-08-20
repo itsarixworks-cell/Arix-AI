@@ -13,10 +13,13 @@ from typing import Any
 
 from backend.app.tools.registry import ToolDefinition, ToolRegistry
 from backend.app.tools.safety import (
+    atomic_output_path,
+    atomic_write_text,
     bounded_text,
     require_confirmation,
     require_optional_dependency,
     resolve_user_path,
+    verify_written_file,
 )
 
 _MAX_SECTIONS = 100
@@ -33,7 +36,7 @@ def _document_output(output_path: str, title: str, extension: str) -> Path:
     target = (
         resolve_user_path(output_path)
         if output_path
-        else resolve_user_path(str(Path.home() / "Documents" / "Arix" / f"{_slug(title, 'document')}{extension}"))
+        else resolve_user_path(f"Documents/Arix/{_slug(title, 'document')}{extension}")
     )
     if target.suffix.casefold() != extension:
         raise ValueError(f"output_path must end in {extension}")
@@ -76,8 +79,16 @@ def _presentation_builder_sync(
                 body.text = bullets[0]
                 for bullet in bullets[1:]:
                     body.text_frame.add_paragraph().text = bullet
-    presentation.save(target)
-    return {"created": True, "path": str(target), "slides": len(slides), "title": heading}
+    with atomic_output_path(target) as temporary:
+        presentation.save(temporary)
+    verified = verify_written_file(target)
+    return {
+        "created": True,
+        "completed": True,
+        **verified,
+        "slides": len(slides),
+        "title": heading,
+    }
 
 
 async def presentation_builder(
@@ -134,8 +145,17 @@ def _spreadsheet_builder_sync(
             worksheet.column_dimensions[letter].width = min(50, max(10, *(len(str(cell.value or "")) + 2 for cell in column[:100])))
     workbook.properties.title = heading
     workbook.properties.creator = "Arix AI"
-    workbook.save(target)
-    return {"created": True, "path": str(target), "sheets": len(sheets), "cells": total_cells, "title": heading}
+    with atomic_output_path(target) as temporary:
+        workbook.save(temporary)
+    verified = verify_written_file(target)
+    return {
+        "created": True,
+        "completed": True,
+        **verified,
+        "sheets": len(sheets),
+        "cells": total_cells,
+        "title": heading,
+    }
 
 
 async def spreadsheet_builder(
@@ -180,8 +200,16 @@ def _word_document_sync(
         for bullet in [str(value).strip()[:2_000] for value in item.get("bullets", [])][:100]:
             if bullet:
                 document.add_paragraph(bullet, style="List Bullet")
-    document.save(target)
-    return {"created": True, "path": str(target), "sections": len(sections), "title": heading}
+    with atomic_output_path(target) as temporary:
+        document.save(temporary)
+    verified = verify_written_file(target)
+    return {
+        "created": True,
+        "completed": True,
+        **verified,
+        "sections": len(sections),
+        "title": heading,
+    }
 
 
 async def word_document(
@@ -228,9 +256,22 @@ def _pdf_document_sync(
             if bullet:
                 escaped = bullet.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 story.append(platypus.Paragraph(f"• {escaped}", styles["BodyText"]))
-    document = platypus.SimpleDocTemplate(str(target), pagesize=pagesizes.LETTER, title=heading, author=author.strip()[:200] or "Arix AI")
-    document.build(story)
-    return {"created": True, "path": str(target), "sections": len(sections), "title": heading}
+    with atomic_output_path(target) as temporary:
+        document = platypus.SimpleDocTemplate(
+            str(temporary),
+            pagesize=pagesizes.LETTER,
+            title=heading,
+            author=author.strip()[:200] or "Arix AI",
+        )
+        document.build(story)
+    verified = verify_written_file(target)
+    return {
+        "created": True,
+        "completed": True,
+        **verified,
+        "sections": len(sections),
+        "title": heading,
+    }
 
 
 async def pdf_document(
@@ -265,9 +306,8 @@ def _load_tasks() -> list[dict[str, Any]]:
 
 def _save_tasks(tasks: list[dict[str, Any]]) -> None:
     path = _task_store()
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, path)
+    atomic_write_text(path, json.dumps(tasks, ensure_ascii=False, indent=2))
+    verify_written_file(path, minimum_bytes=2)
 
 
 def _agent_task_sync(
@@ -354,13 +394,13 @@ def register_document_tools(registry: ToolRegistry) -> None:
     }
     registry.register(ToolDefinition(
         name="presentation_builder",
-        description="Create a PowerPoint presentation from structured slide titles and bullets.",
+        description="Create and verify a PowerPoint presentation from structured slide titles and bullets. output_path may use a Documents/... known-folder alias.",
         parameters={"type": "object", "properties": {"title": {"type": "string"}, "slides": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "object", "properties": {"title": {"type": "string"}, "subtitle": {"type": "string"}, "bullets": {"type": "array", "items": {"type": "string"}, "maxItems": 20}}, "additionalProperties": False}}, **common_output}, "required": ["title", "slides"], "additionalProperties": False},
         handler=presentation_builder,
     ))
     registry.register(ToolDefinition(
         name="spreadsheet_builder",
-        description="Create a formatted Excel workbook from structured worksheet rows.",
+        description="Create and verify a formatted Excel workbook from structured worksheet rows. output_path may use a Documents/... known-folder alias.",
         parameters={"type": "object", "properties": {"title": {"type": "string"}, "sheets": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "object", "properties": {"name": {"type": "string"}, "rows": {"type": "array", "maxItems": _MAX_ROWS, "items": {"type": "array", "maxItems": 200}}}, "required": ["rows"], "additionalProperties": False}}, **common_output}, "required": ["title", "sheets"], "additionalProperties": False},
         handler=spreadsheet_builder,
     ))

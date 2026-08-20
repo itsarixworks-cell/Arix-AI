@@ -1,6 +1,6 @@
 # Arix AI
 
-Arix AI is a local, voice-first Windows desktop assistant. The current Phase 3 foundation combines a premium Electron interface and Python 3.11 Gemini Live bridge with typed function calling, two-tier long-term memory, an interactive 3D memory graph, and a guarded executable-tool suite.
+Arix AI is a local, voice-first Windows desktop assistant. The current Phase 4 foundation combines a premium Electron interface and Python 3.11 Gemini Live bridge with typed function calling, two-tier long-term memory, an interactive 3D memory graph, verified executable side effects, and guarded webcam gesture control.
 
 > Arix is intentionally a desktop application, not a hosted web application. The backend binds to `127.0.0.1`, and the Gemini API key stays on the user's machine.
 
@@ -14,11 +14,16 @@ Arix AI is a local, voice-first Windows desktop assistant. The current Phase 3 f
 - In-app Gemini API key, model, voice, and system-instruction fields
 - Typed Gemini function registry with normalized success and error results
 - `save_memory` and `request_memory` live-session tools
-- 24 typed Gemini tools with normalized structured results
+- 25 typed Gemini tools with normalized structured results, error codes, durations, and local JSONL audit records
 - Memory: `save_memory` and `request_memory`
 - Discovery: `open_app`, `web_search`, `weather_report`, `youtube_video`, and `flight_finder`
-- Windows automation: `reminder`, `computer_settings`, `computer_control`, and `shutdown_arix`
+- Windows automation: `reminder`, `computer_settings`, `computer_control`, guarded `gesture_control`, and `shutdown_arix`
 - Workspace automation: `browser_control`, `file_controller`, `desktop_control`, `screen_process`, and `file_processor`
+- Webcam hand tracking maps the index fingertip to cursor movement and a debounced thumb-index pinch to click, with confirmation, bounded runtime, corner failsafe, and explicit stop/status actions
+- File writes and Office/PDF builders use atomic publication, post-save existence/size verification, and OneDrive-aware known-folder aliases such as `Documents/Arix/report.docx`
+- The live UI shows recent tool success/failure, saved paths, execution duration, and a user-operated confirmation retry button
+- Browser form filling handles up to 20 reviewed fields without returning entered values, and folder organization supports file type or modified month
+- Advanced processing includes Excel statistics, text-oriented PDF-to-Word conversion, and bounded FFmpeg stream-copy video trimming
 - Integrations: reviewed message composers, private-LAN Kasa controls, and Steam update/install requests
 - Builders: PowerPoint, Excel, Word, and PDF generation plus structured local agent-task records
 - Allowlisted, shell-free application launching and HTTP(S)-only website opening
@@ -61,7 +66,7 @@ Electron renderer (React)
 Python FastAPI bridge
   ├─ Gemini Live lifecycle and event translation
   ├─ bounded real-time audio queue
-  ├─ typed 24-tool registry with confirmation and path guards
+  ├─ typed 25-tool registry with confirmation, audit, and path guards
   └─ two-tier memory runtime
        ├─ private text scratchpad
        ├─ local graph JSON or Firebase RTDB
@@ -110,6 +115,8 @@ Arix-AI/
 3. [Node.js 20 LTS or newer](https://nodejs.org/)
 4. A Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
 5. Optional: the Tesseract desktop binary for OCR actions
+6. Optional: FFmpeg on `PATH` for video trimming
+7. A webcam and Windows camera permission for gesture control
 
 ### Install
 
@@ -144,7 +151,9 @@ The setup scripts also install Playwright's isolated Chromium browser. The start
 7. Speak naturally. The orb and waveform respond to microphone activity, and Arix plays audio as it arrives.
 8. Use the right-side composer to send text in the same session.
 9. Open **Memory** from the navigation rail to inspect the constellation. Search titles, filter categories, adjust minimum importance, inspect nodes, or fit the graph to the viewport.
-10. Select **End live session** when finished.
+10. Review executable actions in the right-side **Recent actions** feed. Saved paths and failures appear there; use **Confirm** only after reviewing a consequential request.
+11. To use hand tracking, ask Arix to start gesture control and confirm. Move your index fingertip to move the cursor, pinch thumb and index finger once to click, and move the pointer to a screen corner or ask Arix to stop.
+12. Select **End live session** when finished.
 
 The API key is deliberately not stored. Enter it again after restarting the application. When Firebase is not configured, memory remains local under `backend/data/` (or `ARIX_DATA_DIR`).
 
@@ -192,12 +201,13 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8765 --reload
 
 - `tier1_memory.txt`: bounded private scratchpad for explicit durable facts
 - `memory_graph.json`: local adjacency-list graph fallback
+- `tool_audit.jsonl`: local execution metadata containing timestamps, tool names, argument keys, result status/error code, and duration; argument values are never recorded
 - Firebase `/memory/nodes`: full memory nodes
 - Firebase `/memory/edges`: bidirectional adjacency data
 - Firebase `/memory/title_index`: compact retrieval index
 - Firebase `/memory/anchors`: permanent Arix and user root markers
 
-All local writes use a temporary file followed by an atomic replace. Graph nodes support categories, importance, access metadata, source attribution, archiving, and weighted relationships.
+Persistent memory, text replacements, processed outputs, and generated Office/PDF files use a temporary sibling followed by an atomic replace and verification. Graph nodes support categories, importance, access metadata, source attribution, archiving, and weighted relationships.
 
 ## Security notes
 
@@ -212,7 +222,10 @@ All local writes use a temporary file followed by an atomic replace. Graph nodes
 - File operations resolve paths beneath the user profile, reject traversal/symlink escapes, bound reads and traversal, and use the Recycle Bin for deletion.
 - Shutdown, delete, overwrite, move, organization, message composition, browser submissions, smart-home state changes, and Steam installs/updates require explicit confirmation.
 - Browser automation uses one isolated Playwright context, blocks local/internal URL targets, applies timeouts, and does not log typed values.
-- Optional Windows and document dependencies are loaded only when their tool is called, with actionable install errors.
+- Optional Windows, gesture, browser, media, and document dependencies are loaded only when their tool is called, with actionable install errors.
+- Webcam pointer control requires explicit confirmation, has a maximum runtime, uses PyAutoGUI's corner failsafe, and never records or stores camera frames.
+- File creation, replacement, processed outputs, and Office/PDF builders publish through temporary sibling files and verify the final file before reporting success.
+- Tool audit records contain argument names only, never message text, typed form values, file content, or other argument values.
 - No executable tool evaluates generated code or accepts arbitrary shell commands.
 
 ## Testing status
@@ -220,9 +233,9 @@ All local writes use a temporary file followed by an atomic replace. Graph nodes
 - Frontend production build: passing
 - TypeScript type-check: passing
 - ESLint: passing
-- Python unit/API tests: passing (46 tests)
+- Python unit/API tests: passing (56 tests)
 - Backend Python compile check: passing
-- Memory, registry, safety, confirmation, file, browser, computer, integration, processor, document, and API tests: passing
+- Memory, registry, audit, atomic-save, known-folder, confirmation, file, browser, gesture, computer, integration, processor, document, and API tests: passing
 - Live Gemini and Firebase credentials require manual verification on Windows with valid account access, network access, and microphone permission
 
 ## Not implemented yet
@@ -230,23 +243,27 @@ All local writes use a temporary file followed by an atomic replace. Graph nodes
 - Full conversation history and session resumption (durable fact memory is implemented)
 - Production installer containing an embedded Python runtime and OCR binary
 - Secure persisted API-key storage
-- Per-tool permissions UI, audit-history UI, and session-scoped screen-capture consent
+- Persistent audit-history browser and granular per-tool permission settings (the current live session shows recent action results and confirmation prompts)
 - Direct provider APIs that can prove message delivery; current messaging opens a reviewed composer and correctly reports `sent: false`
 - Autonomous arbitrary-code execution; `agent_task` intentionally stores and tracks structured tasks only
+- Audio/video transcription, layout-preserving PDF/Word editing, rich PowerPoint themes, and Excel chart generation
+- Provider-authenticated Atomberg routines, Epic scheduling/monitoring, Instagram posting/DMs, and delivery-verifiable WhatsApp/Telegram sends
+- Parsed Google Flights summaries, YouTube summarization, and YouTube trending retrieval
 
 ## Recommended next steps
 
-1. Add a renderer permission/confirmation dialog and persistent local audit history for every consequential tool result.
+1. Run Windows hardware integration tests for webcam tracking, brightness, multi-monitor capture, Task Scheduler, Steam, FFmpeg, Playwright, and Kasa devices.
 2. Add Windows Credential Manager integration for optional key persistence.
-3. Bundle a managed Python 3.11 runtime, Playwright Chromium, and optional OCR runtime into the Electron installer.
-4. Add SQLite conversation history and session resumption.
-5. Add explicit per-session consent controls for screen capture, OCR, keyboard, and mouse automation.
-6. Run Windows hardware integration tests for brightness, multi-monitor capture, Task Scheduler, Steam, and Kasa devices.
-7. Create a signed Windows installer through a Windows GitHub Actions runner.
+3. Bundle a managed Python 3.11 runtime, Playwright Chromium, optional OCR runtime, and FFmpeg into the Electron installer.
+4. Add SQLite conversation history, persistent audit browsing, and session resumption.
+5. Add granular per-session consent controls for screen capture, OCR, keyboard, mouse, and camera automation.
+6. Add provider-authenticated Atomberg, Epic Games, Instagram, and delivery-verifiable messaging integrations without storing credentials in the renderer.
+7. Add media transcription and YouTube/flight summarization through the active backend Gemini session.
+8. Create a signed Windows installer through a Windows GitHub Actions runner.
 
 ## Deployment status
 
 - Platform: Local Windows desktop
 - Hosted deployment: Not applicable
 - Repository: `https://github.com/itsarixworks-cell/Arix-AI`
-- Phase: 3 — voice UI, graph memory, and guarded executable-tool suite
+- Phase: 4 foundation — verified actions, visible results, gesture control, and expanded workspace/file processing

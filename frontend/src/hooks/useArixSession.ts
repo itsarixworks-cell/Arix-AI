@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PipelineStatus, ServerEvent, SessionConfig, TranscriptEntry } from '../types/arix'
+import type { PipelineStatus, ServerEvent, SessionConfig, ToolResultEntry, TranscriptEntry } from '../types/arix'
 import { useAudioEngine } from './useAudioEngine'
 
 const SOCKET_URL = import.meta.env.VITE_ARIX_WS_URL ?? 'ws://127.0.0.1:8765/ws/live'
@@ -8,6 +8,7 @@ export function useArixSession() {
   const [status, setStatus] = useState<PipelineStatus>('offline')
   const [statusMessage, setStatusMessage] = useState('Ready when you are')
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([])
+  const [toolResults, setToolResults] = useState<ToolResultEntry[]>([])
   const socketRef = useRef<WebSocket | null>(null)
 
   const sendAudio = useCallback((chunk: ArrayBuffer) => {
@@ -63,6 +64,24 @@ export function useArixSession() {
         void playPcm(event.data, sampleRate)
       } else if (event.type === 'transcript') {
         upsertTranscript(event.role, event.text, event.final)
+      } else if (event.type === 'tool.result') {
+        setToolResults((current) => [
+          ...current.slice(-49),
+          {
+            id: crypto.randomUUID(),
+            name: event.name,
+            result: event.result,
+            timestamp: Date.now(),
+          },
+        ])
+        if (!event.result.ok) {
+          const message = event.result.error_code === 'confirmation_required'
+            ? `${event.name} is waiting for your confirmation`
+            : `${event.name} failed: ${event.result.error ?? 'Unknown tool error'}`
+          setStatusMessage(message)
+        } else {
+          setStatusMessage(`${event.name} completed`)
+        }
       } else if (event.type === 'turn.complete') {
         setTranscripts((current) => current.map((entry) => ({ ...entry, final: true })))
         setStatus('listening')
@@ -96,8 +115,21 @@ export function useArixSession() {
     return true
   }, [upsertTranscript])
 
-  const clearTranscripts = useCallback(() => setTranscripts([]), [])
+  const clearHistory = useCallback(() => {
+    setTranscripts([])
+    setToolResults([])
+  }, [])
   useEffect(() => () => socketRef.current?.close(), [])
 
-  return { status, statusMessage, transcripts, audioLevel, connect, disconnect, sendText, clearTranscripts }
+  return {
+    status,
+    statusMessage,
+    transcripts,
+    toolResults,
+    audioLevel,
+    connect,
+    disconnect,
+    sendText,
+    clearHistory,
+  }
 }

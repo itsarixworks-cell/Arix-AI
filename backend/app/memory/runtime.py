@@ -11,6 +11,7 @@ from backend.app.memory.scratchpad import TierOneScratchpad
 from backend.app.memory.service import MemoryService
 from backend.app.tools.computer_tools import register_computer_tools
 from backend.app.tools.document_tools import register_document_tools
+from backend.app.tools.gesture_tools import close_gesture_runtime, register_gesture_tools
 from backend.app.tools.integration_tools import register_integration_tools
 from backend.app.tools.memory_tools import register_memory_tools
 from backend.app.tools.processor_tools import register_processor_tools
@@ -43,6 +44,7 @@ class MemoryRuntime:
         if self.manager:
             await self.manager.close()
         await close_browser_runtime()
+        await close_gesture_runtime()
 
 
 async def create_memory_runtime(
@@ -61,10 +63,11 @@ async def create_memory_runtime(
         repository = LocalGraphRepository(data_directory / "memory_graph.json")
     await repository.ensure_anchors()
     service = MemoryService(repository, TierOneScratchpad(data_directory / "tier1_memory.txt"))
-    tools = ToolRegistry()
+    tools = ToolRegistry(audit_path=data_directory / "tool_audit.jsonl")
     register_memory_tools(tools, service)
     register_system_tools(tools)
     register_computer_tools(tools)
+    register_gesture_tools(tools)
     register_workspace_tools(tools)
     register_integration_tools(tools)
     register_processor_tools(tools)

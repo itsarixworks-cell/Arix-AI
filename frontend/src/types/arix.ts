@@ -10,6 +10,22 @@ export interface TranscriptEntry {
   final: boolean
 }
 
+export interface ToolExecutionResult {
+  ok: boolean
+  result?: Record<string, unknown>
+  error?: string
+  error_code?: 'confirmation_required' | 'path_error' | 'invalid_arguments' | 'unavailable' | 'execution_failed' | 'unknown_tool' | string
+  tool?: string
+  duration_ms?: number
+}
+
+export interface ToolResultEntry {
+  id: string
+  name: string
+  result: ToolExecutionResult
+  timestamp: number
+}
+
 export interface SessionConfig {
   apiKey: string
   model: string
@@ -25,7 +41,7 @@ export type ServerEvent =
   | { type: 'interrupted' }
   | { type: 'error'; code?: string; message: string }
   | { type: 'session.ready'; model: string }
-  | { type: 'tool.result'; name: string; result: unknown }
+  | { type: 'tool.result'; name: string; result: ToolExecutionResult }
 
 declare global {
   interface Window {

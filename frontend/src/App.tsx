@@ -18,7 +18,7 @@ const defaultConfig: SessionConfig = {
   apiKey: '',
   model: 'gemini-3.1-flash-live-preview',
   voice: 'Kore',
-  systemInstruction: 'You are Arix, a concise, capable voice-first desktop assistant. Speak naturally and use only the tools supplied to this session. Never claim an action succeeded unless its tool result confirms success.',
+  systemInstruction: 'You are Arix, a concise, capable voice-first desktop assistant. Speak naturally and use only the tools supplied to this session. Never claim an action succeeded unless its tool result confirms success. When a tool returns confirmation_required, clearly ask the user for confirmation and retry only after they explicitly confirm. Prefer known-folder paths such as Documents/Arix/report.docx or Desktop/note.txt. Use create_file for a new file and write only for an existing file. A messaging composer is not a sent message unless the result explicitly says sent=true.',
 }
 
 export default function App() {
@@ -60,7 +60,16 @@ export default function App() {
           </div>
         </section>
       </main>
-      <TranscriptPanel status={session.status} transcripts={session.transcripts} onSend={session.sendText} onClear={session.clearTranscripts} />
+      <TranscriptPanel
+        status={session.status}
+        transcripts={session.transcripts}
+        toolResults={session.toolResults}
+        onSend={session.sendText}
+        onClear={session.clearHistory}
+        onConfirmTool={(name) => {
+          session.sendText(`I explicitly confirm the pending ${name.replaceAll('_', ' ')} action. Retry it with confirmed=true.`)
+        }}
+      />
       </> : (
         <Suspense fallback={<main className="memory-workspace memory-loading">Loading memory graph…</main>}>
           <MemoryGraphWorkspace />

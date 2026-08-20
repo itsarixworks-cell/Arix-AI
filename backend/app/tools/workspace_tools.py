@@ -10,18 +10,21 @@ import threading
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from backend.app.tools.registry import ToolDefinition, ToolRegistry
 from backend.app.tools.safety import (
     MAX_TEXT_BYTES,
+    atomic_write_bytes,
     bounded_number,
     bounded_text,
     require_confirmation,
     require_optional_dependency,
     require_platform,
     resolve_user_path,
+    verify_written_file,
 )
 
 _MAX_RESULTS = 200
@@ -71,6 +74,7 @@ def _file_controller_sync(
     query: str,
     confirmed: bool,
     overwrite: bool,
+    organization: str = "type",
 ) -> dict[str, Any]:
     source = resolve_user_path(path, must_exist=action not in {"create_file", "create_folder"})
     target = resolve_user_path(destination) if destination else None
@@ -91,12 +95,18 @@ def _file_controller_sync(
     if action == "create_file":
         if source.exists():
             require_confirmation("overwrite the existing file", confirmed and overwrite)
-        source.parent.mkdir(parents=True, exist_ok=True)
         data = content.encode("utf-8")
         if len(data) > MAX_TEXT_BYTES:
             raise ValueError("content exceeds the 1 MB text limit")
-        source.write_bytes(data)
-        return {"action": action, "created": True, "path": str(source), "bytes_written": len(data)}
+        atomic_write_bytes(source, data)
+        verified = verify_written_file(source, minimum_bytes=0)
+        return {
+            "action": action,
+            "created": True,
+            "completed": True,
+            **verified,
+            "bytes_written": len(data),
+        }
     if action == "read":
         if not source.is_file():
             raise ValueError("path must be a file")
@@ -112,13 +122,19 @@ def _file_controller_sync(
             raise ValueError("content exceeds the 1 MB text limit")
         if action == "write":
             require_confirmation("replace the file contents", confirmed)
-            source.write_bytes(data)
+            atomic_write_bytes(source, data)
         else:
-            if source.stat().st_size + len(data) > MAX_TEXT_BYTES:
+            existing = source.read_bytes()
+            if len(existing) + len(data) > MAX_TEXT_BYTES:
                 raise ValueError("resulting file would exceed the 1 MB text limit")
-            with source.open("ab") as handle:
-                handle.write(data)
-        return {"action": action, "path": str(source), "bytes_written": len(data)}
+            atomic_write_bytes(source, existing + data)
+        verified = verify_written_file(source, minimum_bytes=0)
+        return {
+            "action": action,
+            "completed": True,
+            **verified,
+            "bytes_written": len(data),
+        }
     if action in {"copy", "move", "rename"}:
         if target is None:
             raise ValueError("destination is required")
@@ -138,7 +154,16 @@ def _file_controller_sync(
         else:
             require_confirmation(f"{action} this item", confirmed)
             shutil.move(str(source), str(target))
-        return {"action": action, "completed": True, "source": str(source), "destination": str(target)}
+        if not target.exists():
+            raise RuntimeError(f"The {action} destination was not created: {target}")
+        return {
+            "action": action,
+            "completed": True,
+            "source": str(source),
+            "destination": str(target),
+            "destination_exists": True,
+            "bytes": target.stat().st_size if target.is_file() else None,
+        }
     if action == "delete":
         require_confirmation("move this item to the Recycle Bin", confirmed)
         send2trash = require_optional_dependency("send2trash", "pip install send2trash")
@@ -159,6 +184,48 @@ def _file_controller_sync(
     if action == "disk_usage":
         usage = shutil.disk_usage(source if source.is_dir() else source.parent)
         return {"action": action, "path": str(source), "total": usage.total, "used": usage.used, "free": usage.free}
+    if action == "organize":
+        if not source.is_dir():
+            raise ValueError("path must be a directory")
+        if organization not in {"type", "date"}:
+            raise ValueError("organization must be type or date")
+        require_confirmation(f"organize files in this folder by {organization}", confirmed)
+        categories = {
+            "Images": {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"},
+            "Documents": {".txt", ".pdf", ".doc", ".docx", ".rtf", ".odt"},
+            "Spreadsheets": {".csv", ".xls", ".xlsx"},
+            "Presentations": {".ppt", ".pptx"},
+            "Audio": {".mp3", ".wav", ".m4a", ".flac", ".aac"},
+            "Video": {".mp4", ".mov", ".mkv", ".webm", ".avi"},
+            "Archives": {".zip", ".7z", ".rar", ".tar", ".gz"},
+        }
+        moved: list[dict[str, str]] = []
+        skipped: list[str] = []
+        for item in list(source.iterdir())[:500]:
+            if not item.is_file() or item.is_symlink():
+                continue
+            if organization == "date":
+                folder = datetime.fromtimestamp(item.stat().st_mtime).strftime("%Y-%m")
+            else:
+                folder = next(
+                    (name for name, suffixes in categories.items() if item.suffix.casefold() in suffixes),
+                    "Other",
+                )
+            target_item = source / folder / item.name
+            if target_item.exists():
+                skipped.append(str(item))
+                continue
+            target_item.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(item), str(target_item))
+            moved.append({"from": str(item), "to": str(target_item)})
+        return {
+            "action": action,
+            "completed": True,
+            "organization": organization,
+            "moved": moved,
+            "count": len(moved),
+            "skipped": skipped,
+        }
     raise ValueError("Unsupported file controller action")
 
 
@@ -170,9 +237,18 @@ async def file_controller(
     query: str = "",
     confirmed: bool = False,
     overwrite: bool = False,
+    organization: str = "type",
 ) -> dict[str, Any]:
     return await asyncio.to_thread(
-        _file_controller_sync, action, path, destination, content, query, confirmed, overwrite
+        _file_controller_sync,
+        action,
+        path,
+        destination,
+        content,
+        query,
+        confirmed,
+        overwrite,
+        organization,
     )
 
 
@@ -197,7 +273,7 @@ class _BrowserRuntime:
         self._page.set_default_navigation_timeout(_BROWSER_TIMEOUT_MS)
         return self._page
 
-    def execute(self, action: str, url: str, query: str, selector: str, text: str, key: str, amount: int, tab_index: int, confirmed: bool, consequential: bool) -> dict[str, Any]:
+    def execute(self, action: str, url: str, query: str, selector: str, text: str, key: str, amount: int, tab_index: int, confirmed: bool, consequential: bool, fields: list[dict[str, str]] | None = None) -> dict[str, Any]:
         page = self._ensure()
         if action in {"navigate", "open_tab"}:
             target = _safe_browser_url(url)
@@ -219,6 +295,25 @@ class _BrowserRuntime:
                 value = bounded_text(text, limit=10_000, field="text")
                 page.locator(css).first.fill(value)
                 return {"action": action, "completed": True, "characters_typed": len(value), "url": page.url}
+        elif action == "fill_form":
+            entries = fields or []
+            if not 1 <= len(entries) <= 20:
+                raise ValueError("fields must contain between 1 and 20 form entries")
+            if consequential:
+                require_confirmation("fill this consequential browser form", confirmed)
+            completed = []
+            for entry in entries:
+                css = bounded_text(entry.get("selector", ""), limit=500, field="field selector")
+                value = bounded_text(entry.get("value", ""), limit=10_000, field="field value")
+                page.locator(css).first.fill(value)
+                completed.append(css)
+            return {
+                "action": action,
+                "completed": True,
+                "fields_filled": len(completed),
+                "selectors": completed,
+                "url": page.url,
+            }
         elif action == "get_text":
             content = page.locator("body").inner_text()[:50_000]
             return {"action": action, "url": page.url, "title": page.title()[:500], "text": content}
@@ -297,12 +392,13 @@ async def browser_control(
     tab_index: int = 0,
     confirmed: bool = False,
     consequential: bool = False,
+    fields: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         _BROWSER.executor,
         _BROWSER.execute,
-        action, url, query, selector, text, key, amount, tab_index, confirmed, consequential,
+        action, url, query, selector, text, key, amount, tab_index, confirmed, consequential, fields,
     )
 
 
@@ -321,15 +417,15 @@ def _download_wallpaper(url: str) -> Path:
     if len(data) > _IMAGE_LIMIT:
         raise ValueError("Wallpaper image exceeds the 10 MB limit")
     extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/bmp": ".bmp"}[content_type]
-    target = Path.home() / "Pictures" / "Arix" / f"wallpaper{extension}"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
+    target = resolve_user_path(f"Pictures/Arix/wallpaper{extension}")
+    atomic_write_bytes(target, data)
+    verify_written_file(target)
     return target
 
 
 def _organize_desktop(confirmed: bool) -> dict[str, Any]:
     require_confirmation("organize Desktop files into category folders", confirmed)
-    desktop = resolve_user_path(str(Path.home() / "Desktop"), must_exist=True)
+    desktop = resolve_user_path("Desktop", must_exist=True)
     categories = {
         "Images": {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"},
         "Documents": {".txt", ".pdf", ".doc", ".docx", ".rtf", ".odt"},
@@ -352,13 +448,13 @@ def _organize_desktop(confirmed: bool) -> dict[str, Any]:
 
 
 def _desktop_control_sync(action: str, path: str, url: str, confirmed: bool) -> dict[str, Any]:
-    desktop = Path.home() / "Desktop"
+    desktop = "Desktop"
     if action == "list":
-        target = resolve_user_path(str(desktop), must_exist=True)
+        target = resolve_user_path(desktop, must_exist=True)
         items = [item.name for item in sorted(target.iterdir(), key=lambda value: value.name.casefold())[:200] if not item.is_symlink()]
         return {"action": action, "items": items, "count": len(items)}
     if action == "stats":
-        target = resolve_user_path(str(desktop), must_exist=True)
+        target = resolve_user_path(desktop, must_exist=True)
         items = _bounded_walk(target)
         return {"action": action, "files": sum(item.is_file() for item in items), "directories": sum(item.is_dir() for item in items), "bytes": sum(item.stat().st_size for item in items if item.is_file())}
     if action == "organize":
@@ -388,11 +484,11 @@ async def desktop_control(action: str, path: str = "", url: str = "", confirmed:
 def register_workspace_tools(registry: ToolRegistry) -> None:
     registry.register(ToolDefinition(
         name="file_controller",
-        description="Safely inspect or modify files within the current user's profile. Destructive and overwrite actions require confirmation.",
+        description="Safely inspect or modify files within the current user's profile. Paths may use Desktop/..., Documents/..., Downloads/..., Pictures/..., Music/..., or Videos/... aliases. Use create_file for new files and write only for existing files. Destructive and overwrite actions require confirmation.",
         parameters={"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["list", "create_file", "create_folder", "read", "write", "append", "copy", "move", "rename", "delete", "find", "info", "disk_usage"]},
+            "action": {"type": "string", "enum": ["list", "create_file", "create_folder", "read", "write", "append", "copy", "move", "rename", "delete", "find", "info", "disk_usage", "organize"]},
             "path": {"type": "string"}, "destination": {"type": "string"}, "content": {"type": "string", "maxLength": MAX_TEXT_BYTES},
-            "query": {"type": "string", "maxLength": 200}, "confirmed": {"type": "boolean", "default": False}, "overwrite": {"type": "boolean", "default": False},
+            "query": {"type": "string", "maxLength": 200}, "organization": {"type": "string", "enum": ["type", "date"], "default": "type"}, "confirmed": {"type": "boolean", "default": False}, "overwrite": {"type": "boolean", "default": False},
         }, "required": ["action", "path"], "additionalProperties": False},
         handler=file_controller,
     ))
@@ -400,9 +496,10 @@ def register_workspace_tools(registry: ToolRegistry) -> None:
         name="browser_control",
         description="Control an isolated Playwright browser. Set consequential=true and obtain confirmation before submissions, purchases, messages, uploads, or authentication.",
         parameters={"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["navigate", "search", "click", "type", "get_text", "scroll", "press", "open_tab", "switch_tab", "list_tabs", "back", "forward", "reload", "close_tab"]},
+            "action": {"type": "string", "enum": ["navigate", "search", "click", "type", "fill_form", "get_text", "scroll", "press", "open_tab", "switch_tab", "list_tabs", "back", "forward", "reload", "close_tab"]},
             "url": {"type": "string"}, "query": {"type": "string"}, "selector": {"type": "string"}, "text": {"type": "string", "maxLength": 10000},
             "key": {"type": "string"}, "amount": {"type": "integer", "minimum": -10000, "maximum": 10000}, "tab_index": {"type": "integer", "minimum": 0},
+            "fields": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string", "maxLength": 10000}}, "required": ["selector", "value"], "additionalProperties": False}},
             "confirmed": {"type": "boolean", "default": False}, "consequential": {"type": "boolean", "default": False},
         }, "required": ["action"], "additionalProperties": False},
         handler=browser_control,

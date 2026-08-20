@@ -1,21 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Eraser, MessageSquare, Send, UserRound } from 'lucide-react'
-import type { PipelineStatus, TranscriptEntry } from '../types/arix'
+import { AlertTriangle, Bot, CheckCircle2, Eraser, MessageSquare, Send, UserRound, Wrench } from 'lucide-react'
+import type { PipelineStatus, ToolResultEntry, TranscriptEntry } from '../types/arix'
 
 interface Props {
   status: PipelineStatus
   transcripts: TranscriptEntry[]
+  toolResults: ToolResultEntry[]
   onSend: (text: string) => boolean
   onClear: () => void
+  onConfirmTool: (name: string) => void
 }
 
-export function TranscriptPanel({ status, transcripts, onSend, onClear }: Props) {
+export function TranscriptPanel({ status, transcripts, toolResults, onSend, onClear, onConfirmTool }: Props) {
   const [draft, setDraft] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
   const connected = !['offline', 'connecting', 'error'].includes(status)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [transcripts])
+  }, [toolResults, transcripts])
 
   const submit = () => {
     if (onSend(draft)) setDraft('')
@@ -28,6 +30,31 @@ export function TranscriptPanel({ status, transcripts, onSend, onClear }: Props)
         <button className="icon-button" onClick={onClear} title="Clear transcript"><Eraser size={16} /></button>
       </header>
       <div className="panel-rule"><span className={connected ? 'online' : ''} />{connected ? 'Channel open' : 'Channel closed'}</div>
+      {toolResults.length > 0 && (
+        <section className="tool-activity" aria-label="Executable action history">
+          <header><Wrench size={12} /> Recent actions</header>
+          {toolResults.slice(-4).reverse().map((entry) => {
+            const output = entry.result.result
+            const path = output && ['path', 'output_path', 'destination']
+              .map((key) => output[key])
+              .find((value): value is string => typeof value === 'string')
+            const needsConfirmation = entry.result.error_code === 'confirmation_required'
+            return (
+              <article className={`tool-result ${entry.result.ok ? 'success' : 'failure'}`} key={entry.id}>
+                {entry.result.ok ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                <div>
+                  <strong>{entry.name.replaceAll('_', ' ')}</strong>
+                  <p>{entry.result.ok ? (path ? `Saved: ${path}` : 'Action completed and confirmed') : entry.result.error}</p>
+                  {typeof entry.result.duration_ms === 'number' && <small>{entry.result.duration_ms} ms</small>}
+                </div>
+                {needsConfirmation && connected && (
+                  <button onClick={() => onConfirmTool(entry.name)}>Confirm</button>
+                )}
+              </article>
+            )
+          })}
+        </section>
+      )}
       <div className="transcript-stream">
         {transcripts.length === 0 ? (
           <div className="empty-transcript"><MessageSquare size={24} /><p>Your live transcript will appear here.</p><span>Start a session, then speak naturally.</span></div>

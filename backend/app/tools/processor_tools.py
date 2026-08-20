@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import io
 import json
 import os
 import re
@@ -17,14 +18,19 @@ from typing import Any
 from backend.app.tools.registry import ToolDefinition, ToolRegistry
 from backend.app.tools.safety import (
     MAX_TEXT_BYTES,
+    atomic_output_path,
+    atomic_write_text,
     bounded_number,
     require_confirmation,
     require_optional_dependency,
     require_platform,
     resolve_user_path,
+    run_command,
+    verify_written_file,
 )
 
 _MANIFEST_FIELD = re.compile(r'^\s*"([^"]+)"\s+"([^"]*)"\s*$')
+_MAX_CELLS = 100_000
 
 
 def _steam_root() -> Path | None:
@@ -168,6 +174,7 @@ def _write_guard(target: Path, confirmed: bool, overwrite: bool) -> None:
 def _file_processor_sync(
     action: str, path: str, output_path: str, width: int | None, height: int | None,
     quality: int, column: str, value: str, descending: bool, confirmed: bool, overwrite: bool,
+    start_seconds: float = 0, end_seconds: float = 0,
 ) -> dict[str, Any]:
     source = resolve_user_path(path, must_exist=True)
     if not source.is_file():
@@ -192,8 +199,9 @@ def _file_processor_sync(
         if action == "format":
             target = _output_path(source, output_path, "_formatted", ".json")
             _write_guard(target, confirmed, overwrite)
-            target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            return {"action": action, "output_path": str(target)}
+            atomic_write_text(target, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+            verified = verify_written_file(target)
+            return {"action": action, "completed": True, "output_path": str(target), **verified}
     if extension == ".csv":
         with source.open(newline="", encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle)
@@ -212,11 +220,19 @@ def _file_processor_sync(
         if action in {"filter", "sort"}:
             target = _output_path(source, output_path, f"_{action}", ".csv")
             _write_guard(target, confirmed, overwrite)
-            with target.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=fields)
-                writer.writeheader()
-                writer.writerows(selected)
-            return {"action": action, "output_path": str(target), "rows": len(selected)}
+            buffer = io.StringIO(newline="")
+            writer = csv.DictWriter(buffer, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(selected)
+            atomic_write_text(target, buffer.getvalue())
+            verified = verify_written_file(target)
+            return {
+                "action": action,
+                "completed": True,
+                "output_path": str(target),
+                **verified,
+                "rows": len(selected),
+            }
     if extension in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
         image_module = require_optional_dependency("PIL.Image", "pip install Pillow")
         with image_module.open(source) as image:
@@ -235,15 +251,111 @@ def _file_processor_sync(
                     output.thumbnail((new_width, new_height))
                 if target.suffix.casefold() in {".jpg", ".jpeg"} and output.mode not in {"RGB", "L"}:
                     output = output.convert("RGB")
-                output.save(target, quality=int(bounded_number(quality, minimum=20, maximum=100, field="quality")), optimize=True)
-                return {"action": action, "output_path": str(target), "width": output.width, "height": output.height, "bytes": target.stat().st_size}
-    if extension == ".pdf" and action in {"pdf_info", "extract_text"}:
+                with atomic_output_path(target) as temporary:
+                    output.save(
+                        temporary,
+                        quality=int(bounded_number(quality, minimum=20, maximum=100, field="quality")),
+                        optimize=True,
+                    )
+                verified = verify_written_file(target)
+                return {
+                    "action": action,
+                    "completed": True,
+                    "output_path": str(target),
+                    **verified,
+                    "width": output.width,
+                    "height": output.height,
+                }
+    if extension in {".xlsx", ".xlsm"} and action == "xlsx_stats":
+        openpyxl = require_optional_dependency("openpyxl", "pip install openpyxl")
+        workbook = openpyxl.load_workbook(source, read_only=True, data_only=True)
+        sheet_stats = []
+        total_cells = 0
+        try:
+            for worksheet in workbook.worksheets[:20]:
+                numeric: list[float] = []
+                non_empty = 0
+                for row in worksheet.iter_rows():
+                    for cell in row:
+                        total_cells += 1
+                        if total_cells > _MAX_CELLS:
+                            raise ValueError("workbook exceeds the 100,000-cell analysis limit")
+                        if cell.value not in (None, ""):
+                            non_empty += 1
+                        if isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
+                            numeric.append(float(cell.value))
+                sheet_stats.append({
+                    "name": worksheet.title,
+                    "rows": worksheet.max_row,
+                    "columns": worksheet.max_column,
+                    "non_empty_cells": non_empty,
+                    "numeric_cells": len(numeric),
+                    "numeric_min": min(numeric) if numeric else None,
+                    "numeric_max": max(numeric) if numeric else None,
+                    "numeric_average": (sum(numeric) / len(numeric)) if numeric else None,
+                })
+        finally:
+            workbook.close()
+        return {"action": action, "path": str(source), "sheets": sheet_stats, "sheet_count": len(sheet_stats)}
+    if extension == ".pdf" and action in {"pdf_info", "extract_text", "pdf_to_word"}:
         pypdf = require_optional_dependency("pypdf", "pip install pypdf")
         reader = pypdf.PdfReader(str(source))
         if action == "pdf_info":
             return {"action": action, "path": str(source), "pages": len(reader.pages), "metadata": {str(key): str(value) for key, value in (reader.metadata or {}).items()}}
         text = "\n\n".join((page.extract_text() or "") for page in reader.pages)[:100_000]
-        return {"action": action, "path": str(source), "text": text, "truncated": len(text) >= 100_000}
+        if action == "extract_text":
+            return {"action": action, "path": str(source), "text": text, "truncated": len(text) >= 100_000}
+        docx = require_optional_dependency("docx", "pip install python-docx")
+        target = _output_path(source, output_path, "_converted", ".docx")
+        _write_guard(target, confirmed, overwrite)
+        document = docx.Document()
+        document.core_properties.title = source.stem
+        document.core_properties.author = "Arix AI"
+        document.add_heading(source.stem, level=0)
+        for page_number, page in enumerate(reader.pages, start=1):
+            if page_number > 1:
+                document.add_page_break()
+            document.add_heading(f"Page {page_number}", level=1)
+            for paragraph in (page.extract_text() or "").split("\n"):
+                if paragraph.strip():
+                    document.add_paragraph(paragraph.strip())
+        with atomic_output_path(target) as temporary:
+            document.save(temporary)
+        verified = verify_written_file(target)
+        return {
+            "action": action,
+            "completed": True,
+            "output_path": str(target),
+            **verified,
+            "pages": len(reader.pages),
+            "note": "Text content was converted; complex PDF layout may not be preserved.",
+        }
+    if extension in {".mp4", ".mov", ".mkv", ".webm", ".avi"} and action == "trim_video":
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("FFmpeg is required for video trimming. Install FFmpeg and add it to PATH.")
+        start = bounded_number(start_seconds, minimum=0, maximum=86_400, field="start_seconds")
+        end = bounded_number(end_seconds, minimum=0.1, maximum=86_400, field="end_seconds")
+        if end <= start:
+            raise ValueError("end_seconds must be greater than start_seconds")
+        if end - start > 3_600:
+            raise ValueError("A single trim operation cannot exceed 60 minutes")
+        target = _output_path(source, output_path, "_trimmed", source.suffix)
+        _write_guard(target, confirmed, overwrite)
+        with atomic_output_path(target) as temporary:
+            run_command([
+                ffmpeg, "-y", "-ss", f"{start:g}", "-to", f"{end:g}",
+                "-i", str(source), "-map", "0", "-c", "copy", str(temporary),
+            ], timeout=120)
+        verified = verify_written_file(target)
+        return {
+            "action": action,
+            "completed": True,
+            "output_path": str(target),
+            **verified,
+            "start_seconds": start,
+            "end_seconds": end,
+        }
     raise ValueError("The requested action is not supported for this file type")
 
 
@@ -251,10 +363,11 @@ async def file_processor(
     action: str, path: str, output_path: str = "", width: int | None = None,
     height: int | None = None, quality: int = 85, column: str = "", value: str = "",
     descending: bool = False, confirmed: bool = False, overwrite: bool = False,
+    start_seconds: float = 0, end_seconds: float = 0,
 ) -> dict[str, Any]:
     return await asyncio.to_thread(
         _file_processor_sync, action, path, output_path, width, height, quality, column, value,
-        descending, confirmed, overwrite,
+        descending, confirmed, overwrite, start_seconds, end_seconds,
     )
 
 
@@ -279,11 +392,11 @@ def register_processor_tools(registry: ToolRegistry) -> None:
     ))
     registry.register(ToolDefinition(
         name="file_processor",
-        description="Perform bounded deterministic processing for text, JSON, CSV, image, and PDF files under the user profile. Never executes code.",
+        description="Perform bounded deterministic processing for text, JSON, CSV, Excel, image, PDF, and video files under the user profile. Supports verified PDF-to-Word output and FFmpeg video trimming. Never executes generated code.",
         parameters={"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["info", "extract_text", "word_count", "validate", "format", "stats", "filter", "sort", "image_info", "resize", "compress", "convert", "pdf_info"]},
+            "action": {"type": "string", "enum": ["info", "extract_text", "word_count", "validate", "format", "stats", "filter", "sort", "image_info", "resize", "compress", "convert", "pdf_info", "pdf_to_word", "xlsx_stats", "trim_video"]},
             "path": {"type": "string"}, "output_path": {"type": "string"}, "width": {"type": "integer"}, "height": {"type": "integer"},
             "quality": {"type": "integer", "minimum": 20, "maximum": 100, "default": 85}, "column": {"type": "string"}, "value": {"type": "string"},
-            "descending": {"type": "boolean", "default": False}, "confirmed": {"type": "boolean", "default": False}, "overwrite": {"type": "boolean", "default": False},
+            "descending": {"type": "boolean", "default": False}, "start_seconds": {"type": "number", "minimum": 0}, "end_seconds": {"type": "number", "minimum": 0.1}, "confirmed": {"type": "boolean", "default": False}, "overwrite": {"type": "boolean", "default": False},
         }, "required": ["action", "path"], "additionalProperties": False}, handler=file_processor,
     ))

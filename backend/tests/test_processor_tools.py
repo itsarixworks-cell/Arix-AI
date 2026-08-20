@@ -43,6 +43,27 @@ async def test_flight_search_validation_and_url() -> None:
         await flight_finder("New York", "LHR", departure, open_browser=False)
 
 
+def test_excel_statistics_are_bounded_and_structured(tmp_path: Path) -> None:
+    import openpyxl
+
+    workbook_path = tmp_path / "metrics.xlsx"
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Metrics"
+    worksheet.append(["Label", "Value"])
+    worksheet.append(["A", 10])
+    worksheet.append(["B", 20])
+    workbook.save(workbook_path)
+
+    with patch("backend.app.tools.processor_tools.resolve_user_path", return_value=workbook_path):
+        result = _file_processor_sync(
+            "xlsx_stats", str(workbook_path), "", None, None, 85, "", "", False, False, False
+        )
+    assert result["sheet_count"] == 1
+    assert result["sheets"][0]["numeric_cells"] == 2
+    assert result["sheets"][0]["numeric_average"] == 15
+
+
 def test_text_and_json_processing(tmp_path: Path) -> None:
     text = tmp_path / "notes.txt"
     text.write_text("Arix tools are safe. Arix tools are tested.", encoding="utf-8")
@@ -60,5 +81,7 @@ def test_text_and_json_processing(tmp_path: Path) -> None:
         formatted = _file_processor_sync("format", str(data), "", None, None, 85, "", "", False, False, False)
     assert count["words"] == 8
     output = Path(formatted["output_path"])
+    assert formatted["completed"] is True
+    assert formatted["exists"] is True
     assert output.exists()
     assert '  "a": 1' in output.read_text(encoding="utf-8")

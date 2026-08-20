@@ -18,6 +18,10 @@ reportlab==4.4.4
 Send2Trash==1.8.3
 youtube-transcript-api==1.2.2
 pytesseract==0.3.13
+# Webcam gesture control (Python 3.11 compatible; loaded only when requested)
+numpy==1.26.4
+opencv-python==4.11.0.86
+mediapipe==0.10.21
 pyautogui==0.9.54; sys_platform == "win32"
 screen-brightness-control==0.24.2; sys_platform == "win32"
 

@@ -5,11 +5,14 @@ import pytest
 
 from backend.app.tools.safety import (
     ConfirmationRequired,
+    atomic_output_path,
+    atomic_write_text,
     bounded_number,
     require_confirmation,
     require_platform,
     resolve_user_path,
     run_command,
+    verify_written_file,
 )
 
 
@@ -30,6 +33,39 @@ def test_resolve_user_path_rejects_escape(tmp_path: Path) -> None:
 def test_resolve_user_path_requires_existing_path(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         resolve_user_path(str(tmp_path / "missing"), must_exist=True, allowed_roots=(tmp_path,))
+
+
+def test_known_folder_alias_prefers_onedrive_when_local_folder_is_missing(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    one_drive = tmp_path / "OneDrive"
+    home.mkdir()
+    (one_drive / "Documents").mkdir(parents=True)
+    with (
+        patch("backend.app.tools.safety.Path.home", return_value=home),
+        patch.dict("backend.app.tools.safety.os.environ", {"OneDrive": str(one_drive)}),
+    ):
+        resolved = resolve_user_path("Documents/Arix/report.docx")
+    assert resolved == one_drive / "Documents" / "Arix" / "report.docx"
+
+
+def test_atomic_writes_are_verified_and_failed_outputs_are_cleaned(tmp_path: Path) -> None:
+    target = tmp_path / "note.txt"
+    atomic_write_text(target, "saved")
+    assert verify_written_file(target) == {
+        "path": str(target),
+        "bytes": 5,
+        "exists": True,
+    }
+
+    failed = tmp_path / "failed.bin"
+    with pytest.raises(RuntimeError, match="builder failed"):
+        with atomic_output_path(failed) as temporary:
+            temporary.write_bytes(b"partial")
+            raise RuntimeError("builder failed")
+    assert not failed.exists()
+    assert not list(tmp_path.glob(".failed.bin.*"))
 
 
 def test_run_command_never_uses_a_shell() -> None:
